@@ -40,7 +40,7 @@ if DEV.platform == "tpu" and N_CHIPS != 8:
 if not hasattr(datasets.IterableDataset, "state_dict"):
     raise RuntimeError(f"datasets {datasets.__version__} can't save stream position; pip install -U datasets")
 
-mesh = jax.sharding.Mesh(np.array(DEVICES), ("data",))
+mesh = jax.sharding.Mesh(np.array(DEVICES), ("data",)) # wow jax
 P = jax.sharding.PartitionSpec
 replicated = jax.sharding.NamedSharding(mesh, P())
 data_sharded = jax.sharding.NamedSharding(mesh, P("data"))
