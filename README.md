@@ -31,4 +31,4 @@ each log line shows loss, grad norm, lr, tok/s, eta, host ram, hbm peak and `q`.
 
 ## requirements
 
-if you somehow have a 8 core tpu, and are running from scratch, download the requirements and run base.py.
+if you somehow have a 8 core tpu, and are running from scratch, download the requirements and run base.py. otherwise kaggle has everything downloaded already
