@@ -12,6 +12,38 @@ ollama run navthings/lilbase "The water cycle begins when"
 
 tags are `latest` (q8_0, 379mb, no measurable loss vs f16), `q4_k_m` (273mb, ~0.8% worse perplexity) and `f16` (594mb). it's a base model, so give it the start of a sentence, not a question.
 
+## examples
+
+what it does best is textbook-style openings and lists, since that's most of fineweb-edu. it keeps a format going on its own. facts are where it slips.
+
+```
+ollama run navthings/lilbase $'Here are some tips for studying effectively:\n1.'
+```
+
+> **1. Keep your schedule**
+>
+> If you're not sure how to study effectively, remember that studying is a mental exercise. You need to spend some time working on the material until you can get it done. Don't worry if you're in a hurry. It will not be finished. Take some time off, relax and be more organized.
+>
+> **2. Use flash cards**
+>
+> It is important for you to know how to study well, but you should also learn some tips on how to study effectively. Using flash cards can help you to study better. When you take this time to study properly, you will understand the material better and be more effective at studying.
+>
+> **3. Study early in the day**
+>
+> Most of us spend a lot of time during the day studying. So you should try to study before you have any breakfast.
+
+```
+ollama run navthings/lilbase "The heart is a muscular organ that"
+```
+
+> has two lobes, one on the right side and one on the left. It pumps blood into the body by way of the arteries. The right side is connected to the lungs and the left side connects with the heart.
+>
+> The heart contains two main chambers, the ventricles (smaller) and the mitral valve (large). The mitral valve allows oxygenated blood to pass from the left atrium into the right ventricle.
+
+reads like a biology textbook, and the anatomy is about half right. the mitral valve goes into the left ventricle, and a heart has four chambers, not "two lobes". that's the tradeoff at 297m params: the style is learned, the facts mostly aren't.
+
+outputs change every run. for fewer tangents, `/set parameter temperature 0.6` inside `ollama run`.
+
 ## what it is
 
 gqa, rope, rmsnorm, swiglu. 24 layers, d=1024, 16 query heads, 4 kv heads. llama tokenizer, 32k vocab. 6.1b tokens of fineweb-edu (sample-10BT), which is roughly chinchilla-optimal for this size.
