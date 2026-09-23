@@ -1,6 +1,16 @@
-# base (tpu)
+# lilbase (tpu)
 
 a 297m param llama-style model trained from scratch on a kaggle tpu v5e-8.
+
+## try it
+
+it's on ollama: https://ollama.com/navthings/lilbase
+
+```
+ollama run navthings/lilbase "The water cycle begins when"
+```
+
+tags are `latest` (q8_0, 379mb, no measurable loss vs f16), `q4_k_m` (273mb, ~0.8% worse perplexity) and `f16` (594mb). it's a base model, so give it the start of a sentence, not a question.
 
 ## what it is
 
@@ -41,4 +51,4 @@ every 50 steps (`LOSS_EVERY`) prints the mean loss over those steps. every 250 s
 
 ## requirements
 
-if you somehow have a 8 core tpu, and are running from scratch, install `tpu/requirements.txt` and run `tpu/base.py`. otherwise kaggle has everything downloaded already
+if you somehow have a 8 core tpu, and are running from scratch, install `tpu/requirements.txt` and run `tpu/lilbase.py`. otherwise kaggle has everything downloaded already

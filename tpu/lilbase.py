@@ -39,7 +39,7 @@ print(f"jax {jax.__version__}, {DEV.platform} {DEV.device_kind}, {N_CHIPS} devic
 print(f"host RAM {psutil.virtual_memory().total / 2**30:.0f} GB")
 
 # checking kaggle actualy gave us 8 chips and not 1. trust issues
-if DEV.platform != "tpu" and not os.environ.get("BASE_ALLOW_CPU"):
+if DEV.platform != "tpu" and not os.environ.get("LILBASE_ALLOW_CPU"):
     raise RuntimeError("jax can't see a tpu. set the accelerator to tpu, or pip install -U 'jax[tpu]' and restart")
 if DEV.platform == "tpu" and N_CHIPS != 8:
     raise RuntimeError(f"expected 8 tpu chips (v5e-8), jax sees {N_CHIPS}. restart the session and try again")
@@ -71,9 +71,9 @@ TOTAL_STEPS = TOTAL_TOKENS // TOKENS_PER_STEP
 
 DATASET, DATASET_CFG = "HuggingFaceFW/fineweb-edu", "sample-10BT"
 TOKENIZER = "hf-internal-testing/llama-tokenizer"
-OUT = "/kaggle/working/base"
+OUT = "/kaggle/working/lilbase"
 # sessions die at 9h, so stop early and resume from a previous version's output added as input. kaggle does not care about your feelings
-RESUME_GLOB = "/kaggle/input/**/base_step_*.json"
+RESUME_GLOB = "/kaggle/input/**/*base_step_*.json"
 TIME_BUDGET_H = 8.4
 os.makedirs(OUT, exist_ok=True)
 DT = jnp.bfloat16 if DEV.platform == "tpu" else jnp.float32
@@ -322,12 +322,12 @@ class Batches:
 
 
 def ckpt_name(step):
-    return os.path.join(OUT, f"base_step_{step:08d}")
+    return os.path.join(OUT, f"lilbase_step_{step:08d}")
 
 
 # zero-padded step in the name means max by basename is the newest
 def latest_ckpt():
-    found = glob.glob(os.path.join(OUT, "base_step_*.json")) + glob.glob(RESUME_GLOB, recursive=True)
+    found = glob.glob(os.path.join(OUT, "lilbase_step_*.json")) + glob.glob(RESUME_GLOB, recursive=True)
     return max(found, key=os.path.basename)[:-5] if found else None
 
 
@@ -383,7 +383,7 @@ def save_ckpt(params, opt, step, ds_state, history):
         "model_config": {"D": D, "N_LAYERS": N_LAYERS, "N_HEADS": N_HEADS, "N_KV": N_KV, "D_FF": D_FF, "SEQ": SEQ},
     })
     del flat
-    for old in glob.glob(os.path.join(OUT, "base_step_*")):
+    for old in glob.glob(os.path.join(OUT, "lilbase_step_*")):
         if not old.startswith(name):
             os.remove(old)
     print(f"[checkpoint] step {step} -> {name}.safetensors")
@@ -558,7 +558,7 @@ def export_weights():
     name = latest_ckpt()
     with open(name + ".json") as f:
         meta = json.load(f)
-    export = os.path.join(OUT, f"base_weights_step_{meta['step']:08d}")
+    export = os.path.join(OUT, f"lilbase_weights_step_{meta['step']:08d}")
     weights = {k: v for k, v in load_file(name + ".safetensors").items() if k.startswith("p:")}
     print(f"exporting {len(weights)} tensors, dtype {next(iter(weights.values())).dtype}")
     write_pair(export, weights, {**{k: meta[k] for k in ("step", "opt_step", "dataset_state")},
