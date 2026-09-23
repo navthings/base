@@ -8,3 +8,7 @@ mac/
 __pycache__/
 .ipynb_checkpoints/
 .DS_Store
+
+# eval env
+eval/.venv/
+eval/run.log
