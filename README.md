@@ -17,29 +17,29 @@ tags are `latest` (q8_0, 379mb, no measurable loss vs f16), `q4_k_m` (273mb, ~0.
 what it does best is textbook-style openings and lists, since that's most of fineweb-edu. it keeps a format going on its own. facts are where it slips.
 
 ```
-ollama run navthings/lilbase $'Here are some tips for studying effectively:\n1.'
+$ ollama run navthings/lilbase $'Here are some tips for studying effectively:\n1.'
+ Keep your schedule
+If you're not sure how to study effectively, remember that studying is a mental exercise.
+You need to spend some time working on the material until you can get it done. Don't worry
+if you're in a hurry. It will not be finished. Take some time off, relax and be more
+organized.
+2. Use flash cards
+It is important for you to know how to study well, but you should also learn some tips on
+how to study effectively. Using flash cards can help you to study better.
+3. Study early in the day
+Most of us spend a lot of time during the day studying. So you should try to study before
+you have any breakfast.
 ```
 
-> **1. Keep your schedule**
->
-> If you're not sure how to study effectively, remember that studying is a mental exercise. You need to spend some time working on the material until you can get it done. Don't worry if you're in a hurry. It will not be finished. Take some time off, relax and be more organized.
->
-> **2. Use flash cards**
->
-> It is important for you to know how to study well, but you should also learn some tips on how to study effectively. Using flash cards can help you to study better. When you take this time to study properly, you will understand the material better and be more effective at studying.
->
-> **3. Study early in the day**
->
-> Most of us spend a lot of time during the day studying. So you should try to study before you have any breakfast.
-
 ```
-ollama run navthings/lilbase "The heart is a muscular organ that"
+$ ollama run navthings/lilbase "The heart is a muscular organ that"
+ has two lobes, one on the right side and one on the left. It pumps blood into the body by
+way of the arteries. The right side is connected to the lungs and the left side connects
+with the heart.
+The heart contains two main chambers, the ventricles (smaller) and the mitral valve
+(large). The mitral valve allows oxygenated blood to pass from the left atrium into the
+right ventricle.
 ```
-
-> has two lobes, one on the right side and one on the left. It pumps blood into the body by way of the arteries. The right side is connected to the lungs and the left side connects with the heart.
->
-> The heart contains two main chambers, the ventricles (smaller) and the mitral valve (large). The mitral valve allows oxygenated blood to pass from the left atrium into the right ventricle.
-
 
 ## what it is
 
