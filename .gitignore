@@ -12,3 +12,5 @@ __pycache__/
 # eval env
 eval/.venv/
 eval/run.log
+eval/quick.py
+eval/quick.log

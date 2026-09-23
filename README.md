@@ -29,6 +29,20 @@ gqa, rope, rmsnorm, swiglu. 24 layers, d=1024, 16 query heads, 4 kv heads. llama
 
 11,634 steps of 524,288 tokens each, data parallel over all 8 chips. bf16 matmuls, and fp32 sometimes
 
+## vs gpt-2
+
+![lilbase vs gpt-2](assets/vs_gpt2.png)
+
+| | gpt2 (124m) | lilbase (297m) |
+|---|---|---|
+| lambada acc | 32.6% | 28.7% |
+| hellaswag acc_norm | 31.1% | 41.0% |
+| arc-easy acc_norm | 39.5% | 50.5% |
+
+zero-shot, lm-eval style scoring (`eval/compare.py`). gpt-2 numbers are the published lm-eval ones, lilbase ran on my mac on subsets (1000 lambada, 400 hellaswag, 400 arc-easy) so give it a couple points either way.
+
+wins hellaswag and arc-easy by ~10 points, loses lambada. makes sense, fineweb-edu is mostly educational text and lambada is novels. also gpt-2 saw way less data per param so this isnt a fair fight, just a fun one.
+
 ## running it
 
 reccomend running on kaggle, just import the notebook (in the repo) and change the accelerator to tpu, then save and run all

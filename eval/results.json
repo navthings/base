@@ -1,0 +1,6 @@
+{
+  "lambada_acc": 0.287,
+  "lambada_ppl": 57.37,
+  "hellaswag_acc_norm": 0.41,
+  "arc_easy_acc_norm": 0.505
+}
