@@ -59,4 +59,4 @@ every 50 steps (`LOSS_EVERY`) prints the mean loss over those steps. every 250 s
 
 ## requirements
 
-if you somehow have a 8 core tpu, and are running from scratch, install `tpu/requirements.txt` and run `tpu/lilbase.py`. otherwise kaggle has everything downloaded already
+if you somehow have a 8 core tpu, and are running from scratch, install `tpu/requirements.txt` and run `tpu/lilbase.py`. otherwise kaggle all the dependencies downloaded for you
