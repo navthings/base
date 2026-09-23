@@ -12,6 +12,10 @@ gqa, rope, rmsnorm, swiglu. 24 layers, d=1024, 16 query heads, 4 kv heads. llama
 
 reccomend running on kaggle, just import the notebook (in the repo) and change the accelerator to tpu, then save and run all
 
+or heres the link to the kaggle notebook
+
+https://www.kaggle.com/code/navneetdagdiya/base-tpu-kaggle
+
 or paste it into a script kernel and hit save version -> save & run all.
 
 it refuses to start if jax sees anything other than 8 tpu chips. kaggle sometimes hands out a broken allocation with 1 chip. restart and try again rather than training at 1/8th speed without noticing.
