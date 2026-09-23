@@ -24,7 +24,7 @@ try:
     os.environ["HF_TOKEN"] = UserSecretsClient().get_secret("HF_TOKEN")
     print("HF_TOKEN loaded from kaggle secrets")
 except Exception as e:
-    print(f"no HF_TOKEN secret ({type(e).__name__}), streaming unauthenticated")
+    print(f"no HF_TOKEN secret ({type(e).__name__}), streaming unauthenticated") # look error management im so optimsed :)
 
 DEVICES = jax.devices()
 N_CHIPS = len(DEVICES)
@@ -32,7 +32,7 @@ DEV = DEVICES[0]
 print(f"jax {jax.__version__}, {DEV.platform} {DEV.device_kind}, {N_CHIPS} device(s)")
 print(f"host RAM {psutil.virtual_memory().total / 2**30:.0f} GB")
 
-# kaggle sometimes hands out a degraded tpu with 1 chip, fail loudly instead of training on 1/8th
+# checking kaggle gave us 8 chips and not 1
 if DEV.platform != "tpu" and not os.environ.get("LILSTORY_ALLOW_CPU"):
     raise RuntimeError("jax can't see a tpu. set the accelerator to tpu, or pip install -U 'jax[tpu]' and restart")
 if DEV.platform == "tpu" and N_CHIPS != 8:
@@ -45,7 +45,7 @@ P = jax.sharding.PartitionSpec
 replicated = jax.sharding.NamedSharding(mesh, P())
 data_sharded = jax.sharding.NamedSharding(mesh, P("data"))
 
-# ~297m params, 6.1b tokens is chinchilla-optimal; micro=16 oom'd hbm so 8x8 accum keeps the same tokens/step
+# the model
 VOCAB, D, N_LAYERS, N_HEADS, N_KV, D_FF = 32000, 1024, 24, 16, 4, 2730
 HEAD_DIM = D // N_HEADS
 ROPE_THETA, NORM_EPS = 10000.0, 1e-5
@@ -97,7 +97,7 @@ def rms_norm(x, w):
     return xf * jax.lax.rsqrt(jnp.mean(xf * xf, -1, keepdims=True) + NORM_EPS) * w
 
 
-# bf16 matmul with fp32 accumulate; out=float32 for residual adds
+# bf16 matmul with fp32 accumulat
 def linear(x, w, out=None):
     return jnp.einsum("...i,oi->...o", x.astype(DT), w.astype(DT), preferred_element_type=out or DT)
 
