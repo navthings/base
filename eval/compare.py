@@ -7,7 +7,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 HERE = os.path.dirname(os.path.abspath(__file__))
 LILBASE = os.path.join(HERE, "..", "mac", "hf")
 MODELS = {"gpt2 (124m)": "openai-community/gpt2", "lilbase (297m)": LILBASE, "gpt2-medium (355m)": "openai-community/gpt2-medium"}
-N_HELLA, N_DOCS, CTX = 2000, 300, 1024
+N_HELLA, N_LAMBADA, N_DOCS, CTX = 2000, 2000, 300, 1024
 dev = "mps" if torch.backends.mps.is_available() else "cpu"
 
 
@@ -23,7 +23,7 @@ def hella_clean(t):
 def load_tasks():
     tasks = {}
     lam = load_dataset("EleutherAI/lambada_openai", "default", split="test")
-    tasks["lambada"] = [(t.rsplit(" ", 1)[0], " " + t.rsplit(" ", 1)[1]) for t in lam["text"]]
+    tasks["lambada"] = [(t.rsplit(" ", 1)[0], " " + t.rsplit(" ", 1)[1]) for t in lam["text"][:N_LAMBADA]]
 
     hs = load_dataset("Rowan/hellaswag", split="validation", revision="refs/convert/parquet").select(range(N_HELLA))
     tasks["hellaswag"] = [(hella_clean(r["activity_label"] + ": " + r["ctx_a"] + " " + r["ctx_b"].capitalize()),
@@ -61,9 +61,11 @@ class Scorer:
     # gather on device, pulling full-vocab logits back to cpu was the slow part
     @torch.no_grad()
     def token_lls(self, seqs, spans):
-        n = max(len(s) for s in seqs)
-        x = torch.zeros(len(seqs), n, dtype=torch.long)
-        mask = torch.zeros(len(seqs), n, dtype=torch.long)
+        # pad to fixed shapes, mps rebuilds kernels for every new shape otherwise
+        n = -(-max(len(s) for s in seqs) // 128) * 128
+        rows = -(-len(seqs) // 4) * 4
+        x = torch.zeros(rows, n, dtype=torch.long)
+        mask = torch.zeros(rows, n, dtype=torch.long)
         for i, s in enumerate(seqs):
             x[i, :len(s)], mask[i, :len(s)] = torch.tensor(s), 1
         x, mask = x.to(dev), mask.to(dev)
@@ -77,12 +79,14 @@ class Scorer:
         seqs, lens = zip(*[self.pair(c, t) for c, t in pairs])
         return self.token_lls(list(seqs), [(len(s) - k, len(s)) for s, k in zip(seqs, lens)])
 
-    def choice_acc(self, items):
+    def choice_acc(self, items, bs=8):
         hits = 0
-        for ctx, choices, label in items:
-            lls = [ll for ll, _ in self.score([(ctx, c) for c in choices])]
-            norm = [ll / len(c) for ll, c in zip(lls, choices)]
-            hits += int(max(range(len(norm)), key=norm.__getitem__) == label)
+        for i in range(0, len(items), bs):
+            group = items[i:i + bs]
+            lls = iter(ll for ll, _ in self.score([(ctx, c) for ctx, choices, _ in group for c in choices]))
+            for ctx, choices, label in group:
+                norm = [next(lls) / len(c) for c in choices]
+                hits += int(max(range(len(norm)), key=norm.__getitem__) == label)
         return hits / len(items)
 
     def lambada(self, items, bs=16):
@@ -130,7 +134,7 @@ def main():
         if dev == "mps":
             torch.mps.empty_cache()
     with open(os.path.join(HERE, "results.json"), "w") as f:
-        json.dump({"n_hellaswag": N_HELLA, "n_fineweb_docs": N_DOCS, "results": results}, f, indent=2)
+        json.dump({"n_hellaswag": N_HELLA, "n_lambada": N_LAMBADA, "n_fineweb_docs": N_DOCS, "results": results}, f, indent=2)
     log(f"done in {(time.time() - t0) / 60:.1f} min")
 
 
