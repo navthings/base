@@ -40,9 +40,6 @@ ollama run navthings/lilbase "The heart is a muscular organ that"
 >
 > The heart contains two main chambers, the ventricles (smaller) and the mitral valve (large). The mitral valve allows oxygenated blood to pass from the left atrium into the right ventricle.
 
-reads like a biology textbook, and the anatomy is about half right. the mitral valve goes into the left ventricle, and a heart has four chambers, not "two lobes". that's the tradeoff at 297m params: the style is learned, the facts mostly aren't.
-
-outputs change every run. for fewer tangents, `/set parameter temperature 0.6` inside `ollama run`.
 
 ## what it is
 
