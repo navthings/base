@@ -1,5 +1,5 @@
 import os, warnings, logging
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"  # quiet harmless startup noise, must run before jax/hf imports
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"  # has to be set before jax imports
 os.environ["HF_HUB_VERBOSITY"] = "error"
 warnings.filterwarnings("ignore", category=UserWarning)
 logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
@@ -30,7 +30,7 @@ try:
     os.environ["HF_TOKEN"] = UserSecretsClient().get_secret("HF_TOKEN")
     print("HF_TOKEN loaded from kaggle secrets")
 except Exception as e:
-    print(f"no HF_TOKEN secret ({type(e).__name__}), streaming unauthenticated") # look error management im so optimsed :)
+    print(f"no HF_TOKEN secret ({type(e).__name__}), streaming unauthenticated")
 
 DEVICES = jax.devices()
 N_CHIPS = len(DEVICES)
@@ -38,35 +38,34 @@ DEV = DEVICES[0]
 print(f"jax {jax.__version__}, {DEV.platform} {DEV.device_kind}, {N_CHIPS} device(s)")
 print(f"host RAM {psutil.virtual_memory().total / 2**30:.0f} GB")
 
-# checking kaggle actualy gave us 8 chips and not 1. trust issues
+# kaggle sometimes hands out 1 chip instead of 8
 if DEV.platform != "tpu" and not os.environ.get("LILBASE_ALLOW_CPU"):
-    raise RuntimeError("jax can't see a tpu. set the accelerator to tpu, or pip install -U 'jax[tpu]' and restart")
+    raise RuntimeError("no tpu found, check the accelerator setting")
 if DEV.platform == "tpu" and N_CHIPS != 8:
-    raise RuntimeError(f"expected 8 tpu chips (v5e-8), jax sees {N_CHIPS}. restart the session and try again")
+    raise RuntimeError(f"got {N_CHIPS} chips instead of 8, restart the session")
 if not hasattr(datasets.IterableDataset, "state_dict"):
-    raise RuntimeError(f"datasets {datasets.__version__} can't save stream position; pip install -U datasets")
+    raise RuntimeError(f"datasets {datasets.__version__} is too old, pip install -U datasets")
 
-mesh = jax.sharding.Mesh(np.array(DEVICES), ("data",)) # wow jax
+mesh = jax.sharding.Mesh(np.array(DEVICES), ("data",))
 P = jax.sharding.PartitionSpec
-replicated = jax.sharding.NamedSharding(mesh, P())
-data_sharded = jax.sharding.NamedSharding(mesh, P("data"))
+repl = jax.sharding.NamedSharding(mesh, P())
+sharded = jax.sharding.NamedSharding(mesh, P("data"))
 
-# the model
 VOCAB, D, N_LAYERS, N_HEADS, N_KV, D_FF = 32000, 1024, 24, 16, 4, 2730
 HEAD_DIM = D // N_HEADS
 ROPE_THETA, NORM_EPS = 10000.0, 1e-5
 SEQ = 1024
-MICRO, ACCUM = 8, 8
+BS, GRAD_ACC = 8, 8
 TOTAL_TOKENS = 6_100_000_000
-CKPT_EVERY, LOSS_EVERY, LOG_EVERY, EVAL_EVERY = 500, 50, 250, 500
-PEAK_LR, WARMUP_STEPS, MIN_LR_RATIO = 4e-4, 1000, 0.1
+SAVE_EVERY, PRINT_EVERY, STATS_EVERY, EVAL_EVERY = 500, 50, 250, 500
+LR, WARMUP_STEPS, MIN_LR_RATIO = 4e-4, 1000, 0.1
 BETA1, BETA2, ADAM_EPS, WEIGHT_DECAY, GRAD_CLIP = 0.9, 0.95, 1e-8, 0.1, 1.0
 EVAL_SEQS, EVAL_DOCS = 256, 1500
 SHUFFLE_BUFFER = 5000
-MIN_FREE_RAM_GB = 2.0
+RAM_FLOOR_GB = 2.0
 SAMPLE_LEN = 256
 
-TOKENS_PER_STEP = MICRO * ACCUM * SEQ * N_CHIPS
+TOKENS_PER_STEP = BS * GRAD_ACC * SEQ * N_CHIPS
 TOTAL_STEPS = TOTAL_TOKENS // TOKENS_PER_STEP
 
 DATASET, DATASET_CFG = "HuggingFaceFW/fineweb-edu", "sample-10BT"
@@ -74,24 +73,24 @@ TOKENIZER = "hf-internal-testing/llama-tokenizer"
 OUT = "/kaggle/working/lilbase"
 # sessions die at 9h, so stop early and resume from a previous version's output added as input. kaggle does not care about your feelings
 RESUME_GLOB = "/kaggle/input/**/*base_step_*.json"
-TIME_BUDGET_H = 8.4
+MAX_HOURS = 8.4
 os.makedirs(OUT, exist_ok=True)
 DT = jnp.bfloat16 if DEV.platform == "tpu" else jnp.float32
 
 
-class RamWatch:
+class MemThread:
     def __init__(self):
         self.phase, self.low, self.peak = "setup", False, 0.0
         threading.Thread(target=self._run, daemon=True).start()
 
-    # samples every second so compile and eval spikes get caught too, ram is sneaky
+    # samples every second so compile and eval spikes get caught too, not just the steady state
     def _run(self):
         proc = psutil.Process()
         while True:
             rss = proc.memory_info().rss / 2**30
             free = psutil.virtual_memory().available / 2**30
             self.peak = max(self.peak, rss)
-            low = free < MIN_FREE_RAM_GB
+            low = free < RAM_FLOOR_GB
             if low and not self.low:
                 print(f"[ram] only {free:.1f} GB free during '{self.phase}', this process holds {rss:.1f} GB", flush=True)
             self.low = low
@@ -159,7 +158,7 @@ def loss_fn(params, seqs, remat=True):
     return nll.mean()
 
 
-# global-norm clip, then decoupled weight decay on matricies only
+# adamw, no decay on norms
 def adamw_update(params, grads, opt, lr):
     step = opt["step"] + 1
     gnorm = jnp.sqrt(sum(jnp.sum(g * g) for g in grads.values()))
@@ -183,12 +182,12 @@ def adamw_update(params, grads, opt, lr):
 def train_step(params, opt, batch, lr):
     @partial(jax.shard_map, mesh=mesh, in_specs=(P(), P(), P("data"), P()), out_specs=(P(), P(), P(), P()))
     def _step(params, opt, batch, lr):
-        local_batch = batch[0]
-        def micro(g_acc, mb):
+        b = batch[0]
+        def micro(acc, mb):
             l, g = jax.value_and_grad(loss_fn)(params, mb)
-            return jax.tree.map(jnp.add, g_acc, g), l
-        g, losses = jax.lax.scan(micro, jax.tree.map(jnp.zeros_like, params), local_batch)
-        g = jax.tree.map(lambda x: jax.lax.pmean(x / local_batch.shape[0], "data"), g)
+            return jax.tree.map(jnp.add, acc, g), l
+        g, losses = jax.lax.scan(micro, jax.tree.map(jnp.zeros_like, params), b)
+        g = jax.tree.map(lambda x: jax.lax.pmean(x / b.shape[0], "data"), g)
         loss = jax.lax.pmean(losses.mean(), "data")
         new_params, new_opt, gnorm = adamw_update(params, g, opt, lr)
         return new_params, new_opt, loss, gnorm
@@ -196,19 +195,19 @@ def train_step(params, opt, batch, lr):
 
 
 @jax.jit
-def eval_loss(params, seqs):
+def val_loss(params, seqs):
     return loss_fn(params, seqs, remat=False)
 
 
-def lr_at_step(step):
+def get_lr(step):
     if step < WARMUP_STEPS:
-        return PEAK_LR * (step + 1) / WARMUP_STEPS
+        return LR * (step + 1) / WARMUP_STEPS
     pr = min(1.0, (step - WARMUP_STEPS) / max(1, TOTAL_STEPS - WARMUP_STEPS))
-    floor = PEAK_LR * MIN_LR_RATIO
-    return floor + (PEAK_LR - floor) * 0.5 * (1 + math.cos(math.pi * pr))
+    floor = LR * MIN_LR_RATIO
+    return floor + (LR - floor) * 0.5 * (1 + math.cos(math.pi * pr))
 
 
-def param_shapes():
+def shapes():
     kv, L = N_KV * HEAD_DIM, N_LAYERS
     return {
         "embed_tokens.weight": (VOCAB, D), "norm.weight": (D,),
@@ -220,24 +219,24 @@ def param_shapes():
     }
 
 
-def init_params(seed=0):
+def init_model(seed=0):
     rng = np.random.default_rng(seed)
     out_std = 0.02 / math.sqrt(2 * N_LAYERS)
     params = {}
-    for k, s in param_shapes().items():
+    for k, s in shapes().items():
         if k.endswith("norm.weight"):
             arr = np.ones(s, np.float32)
         else:
             std = out_std if k.endswith(("o_proj.weight", "down_proj.weight")) else 0.02
             arr = rng.standard_normal(s, dtype=np.float32) * std
-        params[k] = jax.device_put(arr, replicated)
+        params[k] = jax.device_put(arr, repl)
     return params
 
 
-def init_opt(params):
-    return {"step": jax.device_put(jnp.array(0, jnp.int32), replicated),
-            "m": {k: jax.device_put(jnp.zeros_like(p), replicated) for k, p in params.items()},
-            "v": {k: jax.device_put(jnp.zeros_like(p), replicated) for k, p in params.items()}}
+def init_adam(params):
+    return {"step": jax.device_put(jnp.array(0, jnp.int32), repl),
+            "m": {k: jax.device_put(jnp.zeros_like(p), repl) for k, p in params.items()},
+            "v": {k: jax.device_put(jnp.zeros_like(p), repl) for k, p in params.items()}}
 
 
 tok = AutoTokenizer.from_pretrained(TOKENIZER)
@@ -245,22 +244,22 @@ tok.model_max_length = 10**9
 EOS = tok.eos_token_id
 
 
-def open_stream():
+def stream():
     return load_dataset(DATASET, DATASET_CFG, split="train", streaming=True)
 
 
-def build_eval_set():
+def make_eval():
     need = EVAL_SEQS * (SEQ + 1)
     ids = []
-    for ex in open_stream().take(EVAL_DOCS):
+    for ex in stream().take(EVAL_DOCS):
         ids.extend(tok(ex["text"], add_special_tokens=False)["input_ids"])
         ids.append(EOS)
         if len(ids) >= need:
             return np.array(ids[:need], np.int32).reshape(EVAL_SEQS, SEQ + 1)
-    raise RuntimeError(f"only got {len(ids)} tokens from {EVAL_DOCS} docs, need {need}; raise EVAL_DOCS")
+    raise RuntimeError(f"not enough eval tokens ({len(ids)}/{need}), bump EVAL_DOCS")
 
 
-class Batches:
+class Loader:
     def __init__(self, state=None):
         self.state = state
         self.q = queue.Queue(maxsize=32)
@@ -270,14 +269,14 @@ class Batches:
 
     # first EVAL_DOCS docs are held out for eval
     def _open(self):
-        ds = open_stream().skip(EVAL_DOCS).shuffle(buffer_size=SHUFFLE_BUFFER, seed=0)
+        ds = stream().skip(EVAL_DOCS).shuffle(buffer_size=SHUFFLE_BUFFER, seed=0)
         if self.state is not None:
             ds.load_state_dict(self.state)
         return ds
 
-    # background tokenization; network errors reopen the stream at the last emited batch. huggingface pls
+    # tokenizes in the background. network errors reopen the stream at the last emited batch
     def _run(self):
-        need = N_CHIPS * ACCUM * MICRO * (SEQ + 1)
+        need = N_CHIPS * GRAD_ACC * BS * (SEQ + 1)
         failures = 0
         while not self.stop.is_set():
             buf = np.empty(0, np.int32)
@@ -290,7 +289,7 @@ class Batches:
                         enc = tok(texts, add_special_tokens=False)["input_ids"]
                         buf = np.concatenate([buf] + [np.array(e + [EOS], np.int32) for e in enc])
                     self.state = ds.state_dict()
-                    item = (buf[:need].reshape(N_CHIPS, ACCUM, MICRO, SEQ + 1).copy(), self.state)
+                    item = (buf[:need].reshape(N_CHIPS, GRAD_ACC, BS, SEQ + 1).copy(), self.state)
                     buf = buf[need:]
                     failures = 0
                     while not self.stop.is_set():
@@ -321,18 +320,18 @@ class Batches:
         self.thread.join(timeout=10)
 
 
-def ckpt_name(step):
+def ckpt_path(step):
     return os.path.join(OUT, f"lilbase_step_{step:08d}")
 
 
-# zero-padded step in the name means max by basename is the newest
-def latest_ckpt():
+# zero padded so max() gets the newest
+def find_ckpt():
     found = glob.glob(os.path.join(OUT, "lilbase_step_*.json")) + glob.glob(RESUME_GLOB, recursive=True)
     return max(found, key=os.path.basename)[:-5] if found else None
 
 
-# stacked (L, ...) tensors -> per-layer names that match the mlx checkpoint
-def unstack(d, prefix):
+# (L, ...) stacked -> layers.0.x, layers.1.x ...
+def split_layers(d, prefix):
     out = {}
     for k, v in d.items():
         v = np.asarray(v)
@@ -344,40 +343,40 @@ def unstack(d, prefix):
     return out
 
 
-def restack(d):
-    out, per_layer = {}, {}
+def stack_layers(d):
+    out, layers_by_name = {}, {}
     for k, v in d.items():
         parts = k.split(".")
         if parts[0] == "layers":
-            per_layer.setdefault(".".join(parts[2:]), {})[int(parts[1])] = v
+            layers_by_name.setdefault(".".join(parts[2:]), {})[int(parts[1])] = v
         else:
-            out[k] = jax.device_put(v, replicated)
-    for k, layers in per_layer.items():
+            out[k] = jax.device_put(v, repl)
+    for k, layers in layers_by_name.items():
         if sorted(layers) != list(range(N_LAYERS)):
-            raise KeyError(f"checkpoint has layers {sorted(layers)} for {k}, expected 0..{N_LAYERS - 1}")
-        out["layers." + k] = jax.device_put(np.stack([layers[i] for i in range(N_LAYERS)]), replicated)
-    missing = set(param_shapes()) - set(out)
+            raise KeyError(f"missing layers for {k}")
+        out["layers." + k] = jax.device_put(np.stack([layers[i] for i in range(N_LAYERS)]), repl)
+    missing = set(shapes()) - set(out)
     if missing:
-        raise KeyError(f"checkpoint is missing {sorted(missing)[:3]}")
+        raise KeyError(f"checkpoint missing {sorted(missing)[:3]}")
     return out
 
 
-# tmp file + os.replace so a crash never leaves a half-written checkpoint
-def write_pair(name, flat, meta):
+# write to tmp then rename, so a crash mid-save cant corrupt it
+def save_st(name, flat, meta):
     save_file(flat, name + ".safetensors.tmp")
     os.replace(name + ".safetensors.tmp", name + ".safetensors")
     with open(name + ".json", "w") as f:
         json.dump(meta, f)
 
 
-# p: model weights, m:/v: adamw moments for resumeing; only the newest pair is kept
-def save_ckpt(params, opt, step, ds_state, history):
-    flat = unstack(params, "p:")
-    flat.update(unstack(opt["m"], "m:"))
-    flat.update(unstack(opt["v"], "v:"))
-    name = ckpt_name(step)
-    write_pair(name, flat, {
-        "step": step, "opt_step": int(opt["step"]), "dataset_state": ds_state,
+# p: weights, m:/v: adam state for resumeing. only keeps the newest
+def save_ckpt(params, opt, step, stream_pos, history):
+    flat = split_layers(params, "p:")
+    flat.update(split_layers(opt["m"], "m:"))
+    flat.update(split_layers(opt["v"], "v:"))
+    name = ckpt_path(step)
+    save_st(name, flat, {
+        "step": step, "opt_step": int(opt["step"]), "dataset_state": stream_pos,
         "datasets_version": datasets.__version__, "transformers_version": transformers.__version__,
         "dataset": f"{DATASET}/{DATASET_CFG}", "history": history,
         "model_config": {"D": D, "N_LAYERS": N_LAYERS, "N_HEADS": N_HEADS, "N_KV": N_KV, "D_FF": D_FF, "SEQ": SEQ},
@@ -393,127 +392,126 @@ def load_ckpt(name):
     with open(name + ".json") as f:
         meta = json.load(f)
     flat = load_file(name + ".safetensors")
-    params = restack({k[2:]: v for k, v in flat.items() if k.startswith("p:")})
-    opt = {"step": jax.device_put(jnp.array(meta["opt_step"], jnp.int32), replicated),
-           "m": restack({k[2:]: v for k, v in flat.items() if k.startswith("m:")}),
-           "v": restack({k[2:]: v for k, v in flat.items() if k.startswith("v:")})}
+    params = stack_layers({k[2:]: v for k, v in flat.items() if k.startswith("p:")})
+    opt = {"step": jax.device_put(jnp.array(meta["opt_step"], jnp.int32), repl),
+           "m": stack_layers({k[2:]: v for k, v in flat.items() if k.startswith("m:")}),
+           "v": stack_layers({k[2:]: v for k, v in flat.items() if k.startswith("v:")})}
     del flat
     return params, opt, meta
 
 
-def ram_gb():
+def ram_used():
     vm = psutil.virtual_memory()
     return (vm.total - vm.available) / 2**30, vm.available / 2**30
 
 
-def hbm_gb():
+def hbm_used():
     ms = DEV.memory_stats() or {}
     return ms.get("peak_bytes_in_use", 0) / 2**30
 
 
-def run_eval(params, eval_set):
-    evals = jax.device_put(jnp.asarray(eval_set), replicated)
-    return float(np.mean([float(eval_loss(params, evals[i:i + MICRO])) for i in range(0, len(evals), MICRO)]))
+def evaluate(params, val_set):
+    evals = jax.device_put(jnp.asarray(val_set), repl)
+    return float(np.mean([float(val_loss(params, evals[i:i + BS])) for i in range(0, len(evals), BS)]))
 
 
-def train(watch, eval_set):
-    watch.phase = "load/init weights"
-    name = latest_ckpt()
+def train(mem, val_set):
+    mem.phase = "load/init weights"
+    name = find_ckpt()
     if name:
         params, opt, meta = load_ckpt(name)
-        step, ds_state, history = meta["step"], meta["dataset_state"], meta["history"]
+        step, stream_pos, history = meta["step"], meta["dataset_state"], meta["history"]
         print(f"resuming from step {step} ({name})")
     else:
-        params = init_params(seed=0)
-        opt = init_opt(params)
-        step, ds_state, history = 0, None, {"train": [], "eval": []}
+        params = init_model(seed=0)
+        opt = init_adam(params)
+        step, stream_pos, history = 0, None, {"train": [], "eval": []}
         print("starting from scratch")
 
-    batches = Batches(ds_state)
-    loss_sum, n_since = jnp.float32(0), 0
-    out_of_time = False
+    loader = Loader(stream_pos)
+    tot, cnt = jnp.float32(0), 0
+    timed_out = False
     split = 1
-    t_last = time.time()
+    t0 = time.time()
     print(f"training steps {step} -> {TOTAL_STEPS} (first step compiles, give it a minute or two)")
 
-    watch.phase = "compile + first step"
+    mem.phase = "compile + first step"
     try:
         while step < TOTAL_STEPS:
-            if watch.low:
+            if mem.low:
                 raise MemoryError("host RAM nearly full")
-            if time.time() - RUN_START > TIME_BUDGET_H * 3600:
-                out_of_time = True
+            if time.time() - RUN_START > MAX_HOURS * 3600:
+                timed_out = True
                 break
 
-            batch, ds_state = batches.get()
-            # hbm overflow on first compile halves the micro-batch, same tokens per step
+            batch, stream_pos = loader.get()
+            # if hbm overflows on compile, halve micro and double accum
             while True:
                 try:
-                    dev_batch = jax.device_put(
-                        jnp.asarray(batch.reshape(N_CHIPS, ACCUM * split, MICRO // split, SEQ + 1)), data_sharded)
-                    params, opt, loss, gnorm = train_step(params, opt, dev_batch, jnp.float32(lr_at_step(step)))
+                    xb = jax.device_put(
+                        jnp.asarray(batch.reshape(N_CHIPS, GRAD_ACC * split, BS // split, SEQ + 1)), sharded)
+                    params, opt, loss, gnorm = train_step(params, opt, xb, jnp.float32(get_lr(step)))
                     break
                 except jax.errors.JaxRuntimeError as e:
-                    if "RESOURCE_EXHAUSTED" not in str(e) or watch.phase == "train" or (MICRO // split) % 2:
+                    if "RESOURCE_EXHAUSTED" not in str(e) or mem.phase == "train" or (BS // split) % 2:
                         raise
                     split *= 2
-                    print(f"hbm overflow while compiling, retrying with micro-batch {MICRO // split} x {ACCUM * split} accum")
+                    print(f"hbm overflow while compiling, retrying with micro-batch {BS // split} x {GRAD_ACC * split} accum")
             step += 1
-            if watch.phase != "train":
+            if mem.phase != "train":
                 loss.block_until_ready()
-                print(f"compiled, host process peak so far {watch.peak:.1f} GB")
-                watch.phase, t_last = "train", time.time()
+                print(f"compiled. host ram peak {mem.peak:.1f} GB")
+                mem.phase, t0 = "train", time.time()
             else:
-                loss_sum, n_since = loss_sum + loss, n_since + 1
+                tot, cnt = tot + loss, cnt + 1
 
             # q near 0 for long stretches means tokenization is the bottleneck, not the tpu.
-            if n_since and (step % LOSS_EVERY == 0 or step == TOTAL_STEPS):
-                avg = float(loss_sum) / n_since
-                dt = (time.time() - t_last) / n_since
+            if cnt and (step % PRINT_EVERY == 0 or step == TOTAL_STEPS):
+                avg = float(tot) / cnt
+                dt = (time.time() - t0) / cnt
                 eta = (TOTAL_STEPS - step) * dt / 3600
-                used, _ = ram_gb()
+                used, _ = ram_used()
                 history["train"].append([step, avg])
-                if step % LOG_EVERY == 0 or step == TOTAL_STEPS:
-                    print(f"step {step:6d}/{TOTAL_STEPS}  loss={avg:.4f}  gnorm={float(gnorm):.2f}  lr={lr_at_step(step - 1):.2e}  "
+                if step % STATS_EVERY == 0 or step == TOTAL_STEPS:
+                    print(f"step {step:6d}/{TOTAL_STEPS}  loss={avg:.4f}  gnorm={float(gnorm):.2f}  lr={get_lr(step - 1):.2e}  "
                           f"{dt:.3f}s/step  {TOKENS_PER_STEP / dt:,.0f} tok/s  eta={eta:.1f}h  "
-                          f"ram={used:.1f}GB  hbm_peak={hbm_gb():.1f}GB  q={batches.q.qsize()}")
+                          f"ram={used:.1f}GB  hbm_peak={hbm_used():.1f}GB  q={loader.q.qsize()}")
                 else:
                     print(f"step {step:6d}/{TOTAL_STEPS}  loss={avg:.4f}", flush=True)
                 if not math.isfinite(avg):
-                    raise FloatingPointError(f"loss went {avg} at step {step}; latest good checkpoint is {latest_ckpt()}")
-                loss_sum, n_since, t_last = jnp.float32(0), 0, time.time()
+                    raise FloatingPointError(f"loss is {avg} at step {step}")
+                tot, cnt, t0 = jnp.float32(0), 0, time.time()
 
             if step % EVAL_EVERY == 0 or step == TOTAL_STEPS:
-                watch.phase = "eval"
-                ev = run_eval(params, eval_set)
+                mem.phase = "eval"
+                ev = evaluate(params, val_set)
                 history["eval"].append([step, ev])
                 print(f"[eval] step {step}  held_out_loss={ev:.4f}  ppl={math.exp(ev):.1f}")
-                watch.phase, t_last = "train", time.time()
+                mem.phase, t0 = "train", time.time()
 
-            if step % CKPT_EVERY == 0 or step == TOTAL_STEPS:
-                save_ckpt(params, opt, step, ds_state, history)
-                t_last = time.time()
-    # never save on nan, it would overwrite the last good checkpoint
+            if step % SAVE_EVERY == 0 or step == TOTAL_STEPS:
+                save_ckpt(params, opt, step, stream_pos, history)
+                t0 = time.time()
+    # dont save on nan, it would overwrite the last good checkpoint
     except FloatingPointError:
         raise
     except BaseException as e:
         if any(x.is_deleted() for x in jax.tree.leaves((params, opt))):
-            print(f"{type(e).__name__} mid-step; latest saved checkpoint is {latest_ckpt()}")
+            print(f"{type(e).__name__} mid-step, params gone. last ckpt: {find_ckpt()}")
         else:
-            save_ckpt(params, opt, step, ds_state, history)
+            save_ckpt(params, opt, step, stream_pos, history)
             print(f"{type(e).__name__} at step {step}; checkpoint saved")
         raise
     finally:
-        batches.close()
+        loader.close()
 
-    if out_of_time:
-        save_ckpt(params, opt, step, ds_state, history)
-        print(f"stopped at step {step}/{TOTAL_STEPS} after {TIME_BUDGET_H}h to beat the 9h limit. "
-              "to continue: add this notebook's latest output as input, then save version again")
+    if timed_out:
+        save_ckpt(params, opt, step, stream_pos, history)
+        print(f"out of time at step {step}/{TOTAL_STEPS}. add this output as input and save version again to continue")
     return params, history
 
 
-def plot_history(history):
+def plot_loss(history):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -521,7 +519,7 @@ def plot_history(history):
     tr, ev = np.array(history["train"]), np.array(history["eval"])
     plt.figure(figsize=(8, 4))
     if len(tr):
-        plt.plot(tr[:, 0], tr[:, 1], label=f"train ({LOSS_EVERY}-step mean)", alpha=0.6)
+        plt.plot(tr[:, 0], tr[:, 1], label=f"train ({PRINT_EVERY}-step mean)", alpha=0.6)
     if len(ev):
         plt.plot(ev[:, 0], ev[:, 1], "o-", label="held-out")
     plt.xlabel("step"); plt.ylabel("loss"); plt.ylim(top=min(8, plt.ylim()[1])); plt.legend(); plt.grid(alpha=0.3)
@@ -530,11 +528,11 @@ def plot_history(history):
 
 
 @jax.jit
-def logits_at(params, ids, pos):
+def next_logits(params, ids, pos):
     return forward(params, ids, remat=False)[0, pos]
 
 
-# fixed window so it compiles once; eos first because every training doc starts after one
+# fixed length so it only compiles once. starts with eos since thats what training docs start after
 def sample(params, prompt, n=80, temp=0.8, top_k=40, seed=0):
     rng = np.random.default_rng(seed)
     ids = [EOS] + tok(prompt, add_special_tokens=False)["input_ids"][-(SAMPLE_LEN - n - 1):]
@@ -542,7 +540,7 @@ def sample(params, prompt, n=80, temp=0.8, top_k=40, seed=0):
     buf[0, :len(ids)] = ids
     end = len(ids)
     while end < min(len(ids) + n, SAMPLE_LEN):
-        lg = np.asarray(logits_at(params, jnp.asarray(buf), end - 1)) / temp
+        lg = np.asarray(next_logits(params, jnp.asarray(buf), end - 1)) / temp
         top = np.argpartition(lg, -top_k)[-top_k:]
         p = np.exp(lg[top] - lg[top].max())
         nxt = int(rng.choice(top, p=p / p.sum()))
@@ -554,32 +552,32 @@ def sample(params, prompt, n=80, temp=0.8, top_k=40, seed=0):
 
 
 # weights only (~1.2 gb)
-def export_weights():
-    name = latest_ckpt()
+def export():
+    name = find_ckpt()
     with open(name + ".json") as f:
         meta = json.load(f)
     export = os.path.join(OUT, f"lilbase_weights_step_{meta['step']:08d}")
     weights = {k: v for k, v in load_file(name + ".safetensors").items() if k.startswith("p:")}
     print(f"exporting {len(weights)} tensors, dtype {next(iter(weights.values())).dtype}")
-    write_pair(export, weights, {**{k: meta[k] for k in ("step", "opt_step", "dataset_state")},
+    save_st(export, weights, {**{k: meta[k] for k in ("step", "opt_step", "dataset_state")},
                                  "model_config": meta["model_config"]})
 
 
 def main():
-    n_params = sum(math.prod(s) for s in param_shapes().values())
+    n_params = sum(math.prod(s) for s in shapes().values())
     print(f"{n_params / 1e6:.1f}M params, {TOTAL_STEPS} steps, {TOTAL_STEPS * TOKENS_PER_STEP / 1e9:.2f}B training tokens, "
           f"{TOKENS_PER_STEP:,} tokens/step across {N_CHIPS} chips")
 
-    watch = RamWatch()
-    watch.phase = "build eval set"
-    eval_set = build_eval_set()
-    print(f"held-out: {eval_set.shape[0]} x {SEQ} tokens")
+    mem = MemThread()
+    mem.phase = "build eval set"
+    val_set = make_eval()
+    print(f"held-out: {val_set.shape[0]} x {SEQ} tokens")
 
-    params, history = train(watch, eval_set)
-    plot_history(history)
+    params, history = train(mem, val_set)
+    plot_loss(history)
     for prompt in ["The water cycle begins when", "In 1905, Albert Einstein", "The best way to learn a language is"]: # change these to whatever
         print(sample(params, prompt), "\n---")
-    export_weights()
+    export()
 
 
 if __name__ == "__main__":

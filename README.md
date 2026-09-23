@@ -46,16 +46,16 @@ it refuses to start if jax sees anything other than 8 tpu chips. kaggle sometime
 
 all at the top of the file. some important ones:
 
-- `MICRO, ACCUM`: 8x8. 16x4 ran out of hbm by about 400mb. if it overflows on first compile anyway, it halves the micro-batch and retries on its own.
-- `TIME_BUDGET_H`: 8.4. lower it if checkpoint saves start getting cut close.
-- `PEAK_LR`: 4e-4. gpt-3 350m used 3e-4 at a similar batch size, so this is slightly optimistic.
-- `CKPT_EVERY`: 500 steps.
+- `BS, GRAD_ACC`: 8x8. 16x4 ran out of hbm by about 400mb. if it overflows on first compile anyway, it halves the micro-batch and retries on its own.
+- `MAX_HOURS`: 8.4. lower it if checkpoint saves start getting cut close.
+- `LR`: 4e-4. gpt-3 350m used 3e-4 at a similar batch size, so this is slightly optimistic.
+- `SAVE_EVERY`: 500 steps.
   
 also try changing the end print statements to test the end model with different prompts
 
 ## logs
 
-every 50 steps (`LOSS_EVERY`) prints the mean loss over those steps. every 250 steps (`LOG_EVERY`) that line also shows grad norm, lr, tok/s, eta, host ram, hbm peak and `q`. if `q` sits near 0, tokenization is the bottleneck and the tpu is waiting on the cpu.
+every 50 steps (`PRINT_EVERY`) prints the mean loss over those steps. every 250 steps (`STATS_EVERY`) that line also shows grad norm, lr, tok/s, eta, host ram, hbm peak and `q`. if `q` sits near 0, tokenization is the bottleneck and the tpu is waiting on the cpu.
 
 ## requirements
 
