@@ -370,7 +370,7 @@ def write_pair(name, flat, meta):
         json.dump(meta, f)
 
 
-# p: weights for convert.py, m:/v: adamw moments for resumeing; only the newest pair is kept
+# p: model weights, m:/v: adamw moments for resumeing; only the newest pair is kept
 def save_ckpt(params, opt, step, ds_state, history):
     flat = unstack(params, "p:")
     flat.update(unstack(opt["m"], "m:"))
@@ -553,7 +553,7 @@ def sample(params, prompt, n=80, temp=0.8, top_k=40, seed=0):
     return tok.decode(buf[0, 1:end])
 
 
-# weights only (~1.2 gb); on the mac: put the .safetensors and .json in mac/weights/, run mac/convert.py, then mac/sample.py
+# weights only (~1.2 gb)
 def export_weights():
     name = latest_ckpt()
     with open(name + ".json") as f:
