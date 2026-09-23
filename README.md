@@ -31,7 +31,10 @@ gqa, rope, rmsnorm, swiglu. 24 layers, d=1024, 16 query heads, 4 kv heads. llama
 
 ## vs gpt-2
 
-![lilbase vs gpt-2](assets/vs_gpt2_v6.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/vs_gpt2_dark.png">
+  <img alt="lilbase vs gpt-2" src="assets/vs_gpt2_light.png">
+</picture>
 
 | | gpt2 (124m) | lilbase (297m) |
 |---|---|---|
