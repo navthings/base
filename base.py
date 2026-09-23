@@ -466,7 +466,7 @@ def train(watch, eval_set):
             else:
                 loss_sum, n_since = loss_sum + loss, n_since + 1
 
-            # q near 0 for long stretches means tokenization is the bottleneck, not the tpu. its never the tpu, its always me
+            # q near 0 for long stretches means tokenization is the bottleneck, not the tpu.
             if n_since and (step % LOSS_EVERY == 0 or step == TOTAL_STEPS):
                 avg = float(loss_sum) / n_since
                 dt = (time.time() - t_last) / n_since
@@ -493,7 +493,7 @@ def train(watch, eval_set):
             if step % CKPT_EVERY == 0 or step == TOTAL_STEPS:
                 save_ckpt(params, opt, step, ds_state, history)
                 t_last = time.time()
-    # never save on nan, it would overwrite the last good checkpoint. learnt this the hard way
+    # never save on nan, it would overwrite the last good checkpoint
     except FloatingPointError:
         raise
     except BaseException as e:
@@ -577,7 +577,7 @@ def main():
 
     params, history = train(watch, eval_set)
     plot_history(history)
-    for prompt in ["The water cycle begins when", "In 1905, Albert Einstein", "The best way to learn a language is"]:
+    for prompt in ["The water cycle begins when", "In 1905, Albert Einstein", "The best way to learn a language is"]: # change these to whatever
         print(sample(params, prompt), "\n---")
     export_weights()
 
