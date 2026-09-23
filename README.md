@@ -36,11 +36,6 @@ gqa, rope, rmsnorm, swiglu. 24 layers, d=1024, 16 query heads, 4 kv heads. llama
   <img alt="lilbase vs gpt-2" src="assets/vs_gpt2_light2.png">
 </picture>
 
-| | gpt2 (124m) | lilbase (297m) |
-|---|---|---|
-| lambada acc | 32.6% | 28.7% |
-| hellaswag acc_norm | 31.1% | 41.0% |
-| arc-easy acc_norm | 39.5% | 50.5% |
 
 zero-shot, lm-eval style scoring (`eval/compare.py`). gpt-2 numbers are the published lm-eval ones, lilbase ran on my mac on subsets (1000 lambada, 400 hellaswag, 400 arc-easy) so give it a couple points either way.
 
