@@ -41,19 +41,16 @@ or paste it into a script kernel and hit save version -> save & run all.
 
 it refuses to start if jax sees anything other than 8 tpu chips. kaggle sometimes hands out a broken allocation with 1 chip. restart and try again rather than training at 1/8th speed without noticing.
 
-## results
-
-held-out loss 2.608 (perplexity 13.6) at step 11,000. the 8.4h time budget stopped it at step 11,043 of 11,634, by which point the lr was already at its floor, so the missing ~5% wouldn't have moved much. ~193k tok/s across the 8 chips the whole way.
 
 ## knobs
 
-all at the top of the file. the ones worth touching:
+all at the top of the file. some important ones:
 
 - `MICRO, ACCUM`: 8x8. 16x4 ran out of hbm by about 400mb. if it overflows on first compile anyway, it halves the micro-batch and retries on its own.
 - `TIME_BUDGET_H`: 8.4. lower it if checkpoint saves start getting cut close.
 - `PEAK_LR`: 4e-4. gpt-3 350m used 3e-4 at a similar batch size, so this is slightly optimistic.
-- `CKPT_EVERY`: 500 steps. frequent because nobody has measured how well this scales across 8 chips yet.
-
+- `CKPT_EVERY`: 500 steps.
+  
 also try changing the end print statements to test the end model with different prompts
 
 ## logs
