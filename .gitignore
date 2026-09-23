@@ -1,0 +1,12 @@
+# trained weights and checkpoints, far too big for git
+weights/
+*.safetensors
+
+# local envs and caches
+.venv/
+__pycache__/
+.ipynb_checkpoints/
+.DS_Store
+
+# converted pytorch/transformers model (convert.py output)
+hf/
