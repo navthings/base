@@ -29,7 +29,7 @@ all at the top of the file. the ones worth touching:
 - `PEAK_LR`: 4e-4. gpt-3 350m used 3e-4 at a similar batch size, so this is slightly optimistic.
 - `CKPT_EVERY`: 500 steps. frequent because nobody has measured how well this scales across 8 chips yet.
 
-also if you want to change the end print statements to test the end model with different prompts
+also try changing the end print statements to test the end model with different prompts
 
 ## logs
 
