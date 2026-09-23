@@ -31,7 +31,7 @@ all at the top of the file. the ones worth touching:
 
 ## logs
 
-each log line shows loss, grad norm, lr, tok/s, eta, host ram, hbm peak and `q`. if `q` sits near 0, tokenization is the bottleneck and the tpu is waiting on the cpu.
+every 50 steps (`LOSS_EVERY`) prints the mean loss over those steps. every 250 steps (`LOG_EVERY`) that line also shows grad norm, lr, tok/s, eta, host ram, hbm peak and `q`. if `q` sits near 0, tokenization is the bottleneck and the tpu is waiting on the cpu.
 
 ## requirements
 

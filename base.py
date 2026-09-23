@@ -24,7 +24,7 @@ from transformers import AutoTokenizer
 
 RUN_START = time.time()
 
-# hf token avoids rate limits over a 9h stream
+# hf token avoids rate limits over a 9h stream (ask me how i know)
 try:
     from kaggle_secrets import UserSecretsClient
     os.environ["HF_TOKEN"] = UserSecretsClient().get_secret("HF_TOKEN")
@@ -38,7 +38,7 @@ DEV = DEVICES[0]
 print(f"jax {jax.__version__}, {DEV.platform} {DEV.device_kind}, {N_CHIPS} device(s)")
 print(f"host RAM {psutil.virtual_memory().total / 2**30:.0f} GB")
 
-# checking kaggle gave us 8 chips and not 1
+# checking kaggle actualy gave us 8 chips and not 1. trust issues
 if DEV.platform != "tpu" and not os.environ.get("BASE_ALLOW_CPU"):
     raise RuntimeError("jax can't see a tpu. set the accelerator to tpu, or pip install -U 'jax[tpu]' and restart")
 if DEV.platform == "tpu" and N_CHIPS != 8:
@@ -58,7 +58,7 @@ ROPE_THETA, NORM_EPS = 10000.0, 1e-5
 SEQ = 1024
 MICRO, ACCUM = 8, 8
 TOTAL_TOKENS = 6_100_000_000
-CKPT_EVERY, LOG_EVERY, EVAL_EVERY = 500, 50, 500
+CKPT_EVERY, LOSS_EVERY, LOG_EVERY, EVAL_EVERY = 500, 50, 250, 500
 PEAK_LR, WARMUP_STEPS, MIN_LR_RATIO = 4e-4, 1000, 0.1
 BETA1, BETA2, ADAM_EPS, WEIGHT_DECAY, GRAD_CLIP = 0.9, 0.95, 1e-8, 0.1, 1.0
 EVAL_SEQS, EVAL_DOCS = 256, 1500
@@ -72,7 +72,7 @@ TOTAL_STEPS = TOTAL_TOKENS // TOKENS_PER_STEP
 DATASET, DATASET_CFG = "HuggingFaceFW/fineweb-edu", "sample-10BT"
 TOKENIZER = "hf-internal-testing/llama-tokenizer"
 OUT = "/kaggle/working/base"
-# sessions die at 9h, so stop early and resume from a previous version's output added as input
+# sessions die at 9h, so stop early and resume from a previous version's output added as input. kaggle does not care about your feelings
 RESUME_GLOB = "/kaggle/input/**/base_step_*.json"
 TIME_BUDGET_H = 8.4
 os.makedirs(OUT, exist_ok=True)
@@ -84,7 +84,7 @@ class RamWatch:
         self.phase, self.low, self.peak = "setup", False, 0.0
         threading.Thread(target=self._run, daemon=True).start()
 
-    # samples every second so compile and eval spikes get caught too
+    # samples every second so compile and eval spikes get caught too, ram is sneaky
     def _run(self):
         proc = psutil.Process()
         while True:
@@ -103,7 +103,7 @@ def rms_norm(x, w):
     return xf * jax.lax.rsqrt(jnp.mean(xf * xf, -1, keepdims=True) + NORM_EPS) * w
 
 
-# bf16 matmul with fp32 accumulat
+# bf16 matmul, fp32 accumulate
 def linear(x, w, out=None):
     return jnp.einsum("...i,oi->...o", x.astype(DT), w.astype(DT), preferred_element_type=out or DT)
 
@@ -139,7 +139,7 @@ def block(p, x, cos, sin):
     return x + linear(m, p["mlp.down_proj.weight"], jnp.float32)
 
 
-# scan traces block() once and reuses it for every layer
+# scan traces block() once and reuses it for every layer, compile time went from forever to fine
 def forward(params, ids, remat=True):
     cos, sin = rope_tables(ids.shape[1])
     x = params["embed_tokens.weight"][ids].astype(jnp.float32)
@@ -159,7 +159,7 @@ def loss_fn(params, seqs, remat=True):
     return nll.mean()
 
 
-# global-norm clip, then decoupled weight decay on matrices only
+# global-norm clip, then decoupled weight decay on matricies only
 def adamw_update(params, grads, opt, lr):
     step = opt["step"] + 1
     gnorm = jnp.sqrt(sum(jnp.sum(g * g) for g in grads.values()))
@@ -275,7 +275,7 @@ class Batches:
             ds.load_state_dict(self.state)
         return ds
 
-    # background tokenization; network errors reopen the stream at the last emitted batch
+    # background tokenization; network errors reopen the stream at the last emited batch. huggingface pls
     def _run(self):
         need = N_CHIPS * ACCUM * MICRO * (SEQ + 1)
         failures = 0
@@ -370,7 +370,7 @@ def write_pair(name, flat, meta):
         json.dump(meta, f)
 
 
-# p: weights for tpu_convert.py, m:/v: adamw moments for resuming; only the newest pair is kept
+# p: weights for tpu_convert.py, m:/v: adamw moments for resumeing; only the newest pair is kept
 def save_ckpt(params, opt, step, ds_state, history):
     flat = unstack(params, "p:")
     flat.update(unstack(opt["m"], "m:"))
@@ -466,16 +466,19 @@ def train(watch, eval_set):
             else:
                 loss_sum, n_since = loss_sum + loss, n_since + 1
 
-            # q near 0 for long stretches means tokenization is the bottleneck, not the tpu
-            if n_since and (step % LOG_EVERY == 0 or step == TOTAL_STEPS):
+            # q near 0 for long stretches means tokenization is the bottleneck, not the tpu. its never the tpu, its always me
+            if n_since and (step % LOSS_EVERY == 0 or step == TOTAL_STEPS):
                 avg = float(loss_sum) / n_since
                 dt = (time.time() - t_last) / n_since
                 eta = (TOTAL_STEPS - step) * dt / 3600
                 used, _ = ram_gb()
                 history["train"].append([step, avg])
-                print(f"step {step:6d}/{TOTAL_STEPS}  loss={avg:.4f}  gnorm={float(gnorm):.2f}  lr={lr_at_step(step - 1):.2e}  "
-                      f"{dt:.3f}s/step  {TOKENS_PER_STEP / dt:,.0f} tok/s  eta={eta:.1f}h  "
-                      f"ram={used:.1f}GB  hbm_peak={hbm_gb():.1f}GB  q={batches.q.qsize()}")
+                if step % LOG_EVERY == 0 or step == TOTAL_STEPS:
+                    print(f"step {step:6d}/{TOTAL_STEPS}  loss={avg:.4f}  gnorm={float(gnorm):.2f}  lr={lr_at_step(step - 1):.2e}  "
+                          f"{dt:.3f}s/step  {TOKENS_PER_STEP / dt:,.0f} tok/s  eta={eta:.1f}h  "
+                          f"ram={used:.1f}GB  hbm_peak={hbm_gb():.1f}GB  q={batches.q.qsize()}")
+                else:
+                    print(f"step {step:6d}/{TOTAL_STEPS}  loss={avg:.4f}", flush=True)
                 if not math.isfinite(avg):
                     raise FloatingPointError(f"loss went {avg} at step {step}; latest good checkpoint is {latest_ckpt()}")
                 loss_sum, n_since, t_last = jnp.float32(0), 0, time.time()
@@ -490,7 +493,7 @@ def train(watch, eval_set):
             if step % CKPT_EVERY == 0 or step == TOTAL_STEPS:
                 save_ckpt(params, opt, step, ds_state, history)
                 t_last = time.time()
-    # never save on nan, it would overwrite the last good checkpoint
+    # never save on nan, it would overwrite the last good checkpoint. learnt this the hard way
     except FloatingPointError:
         raise
     except BaseException as e:
@@ -518,7 +521,7 @@ def plot_history(history):
     tr, ev = np.array(history["train"]), np.array(history["eval"])
     plt.figure(figsize=(8, 4))
     if len(tr):
-        plt.plot(tr[:, 0], tr[:, 1], label=f"train ({LOG_EVERY}-step mean)", alpha=0.6)
+        plt.plot(tr[:, 0], tr[:, 1], label=f"train ({LOSS_EVERY}-step mean)", alpha=0.6)
     if len(ev):
         plt.plot(ev[:, 0], ev[:, 1], "o-", label="held-out")
     plt.xlabel("step"); plt.ylabel("loss"); plt.ylim(top=min(8, plt.ylim()[1])); plt.legend(); plt.grid(alpha=0.3)
