@@ -10,7 +10,6 @@ it's on ollama: https://ollama.com/navthings/lilbase
 ollama run navthings/lilbase "The water cycle begins when"
 ```
 
-tags are `latest` (q8_0, 379mb, no measurable loss vs f16), `q4_k_m` (273mb, ~0.8% worse perplexity) and `f16` (594mb). it's a base model, so give it the start of a sentence, not a question.
 
 ## examples
 
