@@ -1,5 +1,9 @@
-# local-only: running the trained model on the mac (weights, converter, venv)
-mac/
+# mac: big or downloaded stuff stays local
+mac/weights/
+mac/hf/
+mac/.venv/
+mac/llama.cpp/
+*.gguf
 
 # trained weights and checkpoints, far too big for git
 *.safetensors
