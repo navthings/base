@@ -1,0 +1,6 @@
+Loading weights:   0%|          | 0/218 [00:00<?, ?it/s]Loading weights: 100%|██████████| 218/218 [00:00<00:00, 13337.20it/s]
+{'lambada_acc': 0.287, 'lambada_ppl': 57.37}
+{'lambada_acc': 0.287, 'lambada_ppl': 57.37, 'hellaswag_acc_norm': 0.41}
+{'lambada_acc': 0.287, 'lambada_ppl': 57.37, 'hellaswag_acc_norm': 0.41, 'arc_easy_acc_norm': 0.505}
+ker: There appear to be 1 leaked semaphore objects to clean up at shutdown
+  warnings.warn('resource_tracker: There appear to be %d '

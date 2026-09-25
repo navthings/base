@@ -1,0 +1,5 @@
+data loaded in 29s: lambada=2000, hellaswag=2000, arc_easy=2376, fineweb_edu=300, wikitext=1
+Loading weights:   0%|          | 0/148 [00:00<?, ?it/s]Loading weights: 100%|██████████| 148/148 [00:00<00:00, 7613.19it/s]
+  lambada 75s
+/Users/navneetdagdiya/.local/share/uv/python/cpython-3.12.13-macos-aarch64-none/lib/python3.12/multiprocessing/resource_tracker.py:279: UserWarning: resource_tracker: There appear to be 1 leaked semaphore objects to clean up at shutdown
+  warnings.warn('resource_tracker: There appear to be %d '
