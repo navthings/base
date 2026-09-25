@@ -1,5 +1,5 @@
 # mac: big or downloaded stuff stays local
-mac/weights/
+weights/
 mac/hf/
 mac/.venv/
 mac/llama.cpp/
