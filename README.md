@@ -69,3 +69,7 @@ every 50 steps (`PRINT_EVERY`) prints the mean loss over those steps. every 250 
 ## requirements
 
 if you somehow have a 8 core tpu, and are running from scratch, install `tpu/requirements.txt` and run `tpu/lilbase.py`. otherwise kaggle all the dependencies downloaded for you
+
+## next
+
+the bigger follow-up (523m, 12b tokens) and the chat finetuning live in [sprout](https://github.com/navthings/sprout).
